@@ -1,0 +1,35 @@
+[package]
+name = "client"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+chacha20poly1305 = { version = "0.10.1", features = ["stream"] }
+anyhow = "1.0.70"
+rand = "0.8.5"
+sysinfo = "0.28.4"
+walkdir = "2.3.3"
+rayon = "1.7.0"
+serde = { version = "1.0.160", features = ["derive"] }
+serde_json = { version = "1.0.96", features = ["default"] }
+rsa = "0.9.0"
+zeroize = { version = "1.6.0", features = ["derive"] }
+directories = "5.0.0"
+lazy_static = "1.4.0"
+obfstr = "0.4.3"
+konst = "0.3.4"
+sha2 = "0.10.6"
+
+[dependencies.uuid]
+version = "1.3.1"
+features = [
+    "v4",                # Lets you generate random UUIDs
+    "fast-rng",          # Use a faster (but still sufficiently random) RNG
+]
+
+#[target.'cfg(target_os = "windows")'.dependencies]
+#
+#[target.'cfg(target_os = "linux,mac")'.dependencies]
+#sys_metrics = "0.2.6"
