@@ -1,2 +1,8 @@
 [workspace]
-members = ["client", "decrypt", "generator"]
+resolver = "2"
+members = ["client", "decrypt", "tests/generate_fixtures"]
+
+[profile.bench]
+# Keep benchmark binaries honest (no debug assertions skewing timings)
+opt-level = 3
+debug = false

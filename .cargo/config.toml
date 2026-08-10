@@ -1,0 +1,7 @@
+[alias]
+gen-fixtures = "run --package generate-fixtures -- tests/fixtures"
+
+[env]
+# Compile-time values consumed by the client binary via env!("...")
+UUID = "wannatry-test-uuid"
+PRICE = "420"

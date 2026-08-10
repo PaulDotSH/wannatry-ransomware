@@ -1,46 +1,108 @@
+use std::borrow::BorrowMut;
 use std::fs;
 use std::fs::File;
 use std::io::Read;
-use chacha20poly1305::{XChaCha20Poly1305, KeyInit, aead::Aead};
-use rsa::{RsaPrivateKey, Oaep};
 
-use rsa::pkcs8::{DecodePrivateKey};
 use anyhow::anyhow;
+use chacha20poly1305::aead::Aead;
+use chacha20poly1305::{KeyInit, XChaCha20Poly1305};
+use rand::rngs::OsRng;
+use rsa::pkcs1::LineEnding;
+use rsa::pkcs8::{DecodePrivateKey, EncodePrivateKey, EncodePublicKey};
+use rsa::{Oaep, RsaPrivateKey, RsaPublicKey};
 
+const DEFAULT_BITS: usize = 4096;
 
-fn main() {
-    // Needs the Attacker's private key
-    let private_key = fs::read_to_string("priv.key").expect("Cannot read first key part");
-    let private_key = RsaPrivateKey::from_pkcs8_pem(private_key.as_str()).unwrap();
-    let enc = fs::read("key.part1").unwrap();
+const USAGE: &str = "\
+USAGE:
+    decrypt [COMMAND] [ARGS]
 
-    let padding = Oaep::new::<sha2::Sha256>();
-    let key = private_key.decrypt(padding, enc.as_slice()).expect("failed to decrypt");
-    let key = key.as_slice().try_into().expect("Wrong key size");
+COMMANDS:
+    (default)         Decrypt key.part1 + key.part2 using priv.key and write decryption.key
+    generate [BITS]   Generate a fresh RSA keypair (priv.key + pub.key), default 4096 bits
+    help              Show this help
 
-    let mut nonce = [0u8; 24];
-    let mut file = File::open("key.part2").expect("Cannot read second key part");
+EXAMPLES:
+    decrypt generate 4096
+    decrypt
+";
 
-    file.read_exact(&mut nonce).expect("Cannot read nonce");
+fn main() -> Result<(), anyhow::Error> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
 
-    let mut vec = Vec::new();
-    file.read_to_end(&mut vec).expect("Cannot read encrypted data");
-
-    let dec = decrypt_bytes(vec.as_slice(), key).expect("Cannot decrypt message");
-    println!("Decryption bytes - {:?}", &key);
-    fs::write("decryption.key", &key).expect("Cannot write decryption key");
-    println!("{:?}", String::from_utf8(dec).expect("Malformed string was decrypted"));
+    match args.first().map(String::as_str) {
+        None | Some("decrypt") => decrypt(),
+        Some("generate") => generate(parse_bits(&args)?),
+        Some("help") | Some("-h") | Some("--help") => {
+            println!("{USAGE}");
+            Ok(())
+        }
+        Some(other) => Err(anyhow!("Unknown command: {other}\n\n{USAGE}")),
+    }
 }
 
-fn encrypt_bytes(data: &[u8], key: &[u8; 32], nonce: &[u8; 24]) -> Result<Vec<u8>, anyhow::Error> {
-    let cipher = XChaCha20Poly1305::new(key.into());
+fn parse_bits(args: &[String]) -> Result<usize, anyhow::Error> {
+    match args.get(1) {
+        None => Ok(DEFAULT_BITS),
+        Some(bits) => bits
+            .parse()
+            .map_err(|err| anyhow!("Invalid key size '{bits}': {err}")),
+    }
+}
 
-    let mut encrypted = cipher
-        .encrypt(nonce.into(), data)
-        .map_err(|err| anyhow!("Encrypting bytes: {}", err))?;
-    let mut v = Vec::from(nonce.as_slice());
-    v.append(&mut encrypted);
-    Ok(v)
+fn generate(bits: usize) -> Result<(), anyhow::Error> {
+    let private_key = RsaPrivateKey::new(OsRng.borrow_mut(), bits)
+        .map_err(|err| anyhow!("failed to generate a key: {err}"))?;
+
+    let private_pem = private_key
+        .to_pkcs8_pem(LineEnding::LF)
+        .map_err(|err| anyhow!("Failed to encode private key: {err}"))?;
+    fs::write("priv.key", private_pem.as_bytes())
+        .map_err(|err| anyhow!("Cannot write priv.key: {err}"))?;
+
+    let public_key = RsaPublicKey::from(&private_key);
+    let public_pem = public_key
+        .to_public_key_pem(LineEnding::LF)
+        .map_err(|err| anyhow!("Failed to encode public key: {err}"))?;
+    fs::write("pub.key", public_pem.as_bytes())
+        .map_err(|err| anyhow!("Cannot write pub.key: {err}"))?;
+
+    println!("Generated {bits}-bit RSA keypair: priv.key and pub.key");
+    Ok(())
+}
+
+fn decrypt() -> Result<(), anyhow::Error> {
+    let private_key_pem =
+        fs::read_to_string("priv.key").map_err(|err| anyhow!("Cannot read priv.key: {err}"))?;
+    let private_key = RsaPrivateKey::from_pkcs8_pem(private_key_pem.as_str())
+        .map_err(|err| anyhow!("Invalid priv.key: {err}"))?;
+
+    let enc = fs::read("key.part1").map_err(|err| anyhow!("Cannot read key.part1: {err}"))?;
+
+    let padding = Oaep::new::<sha2::Sha256>();
+    let key_vec = private_key
+        .decrypt(padding, enc.as_slice())
+        .map_err(|err| anyhow!("failed to decrypt: {err}"))?;
+    let key: [u8; 32] = key_vec
+        .as_slice()
+        .try_into()
+        .map_err(|_| anyhow!("Wrong key size: expected 32 bytes, got {}", key_vec.len()))?;
+
+    let mut nonce = [0u8; 24];
+    let mut file = File::open("key.part2").map_err(|err| anyhow!("Cannot read key.part2: {err}"))?;
+    file.read_exact(&mut nonce)
+        .map_err(|err| anyhow!("Cannot read nonce: {err}"))?;
+
+    let mut vec = Vec::new();
+    file.read_to_end(&mut vec)
+        .map_err(|err| anyhow!("Cannot read encrypted data: {err}"))?;
+
+    let dec = decrypt_bytes(vec.as_slice(), &key)
+        .map_err(|err| anyhow!("Cannot decrypt message: {err}"))?;
+    println!("Decryption bytes - {:?}", &key);
+    fs::write("decryption.key", &key).map_err(|err| anyhow!("Cannot write decryption key: {err}"))?;
+    println!("{:?}", String::from_utf8(dec).map_err(|err| anyhow!("Malformed string was decrypted: {err}"))?);
+    Ok(())
 }
 
 fn decrypt_bytes(data: &[u8], key: &[u8; 32]) -> Result<Vec<u8>, anyhow::Error> {

